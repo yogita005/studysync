@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import axios from 'axios'; // You'll need to npm install axios
 import { 
   Book, 
   Users, 
@@ -16,517 +17,700 @@ import {
   Star,
   FileText,
   Calendar,
-  Award
+  Award,
+  Download,
+  X
 } from 'lucide-react';
 
-// Mock data
-const mockCourses = [
-  { id: 1, name: "Mathematics", description: "Advanced calculus and algebra" },
-  { id: 2, name: "Computer Science", description: "Programming fundamentals and algorithms" },
-  { id: 3, name: "Physics", description: "Classical mechanics and thermodynamics" },
-];
+// API base URL
+const API_URL = 'http://localhost:3001/api';
 
-const mockResources = [
-  { id: 1, title: "Calculus Notes", courseId: 1, user: "john_doe", date: "2025-04-28", type: "PDF", rating: 4.5 },
-  { id: 2, title: "Algorithm Design", courseId: 2, user: "jane_smith", date: "2025-04-26", type: "DOCX", rating: 5.0 },
-  { id: 3, title: "Thermodynamics Cheat Sheet", courseId: 3, user: "sam_wilson", date: "2025-04-25", type: "PDF", rating: 4.2 },
-];
+// Create API service
+const api = {
+  login: async (email, password) => {
+    const response = await axios.post(`${API_URL}/login`, { email, password });
+    return response.data;
+  },
+  register: async (username, email, password) => {
+    const response = await axios.post(`${API_URL}/register`, { username, email, password });
+    return response.data;
+  },
+  getResources: async (search = '') => {
+    const response = await axios.get(`${API_URL}/resources`, { 
+      params: { search }
+    });
+    return response.data;
+  },
+  uploadResource: async (formData) => {
+    const response = await axios.post(`${API_URL}/resources`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  },
+  rateResource: async (resourceId, userId, rating, comment) => {
+    const response = await axios.post(`${API_URL}/resources/${resourceId}/rate`, {
+      userId, rating, comment
+    });
+    return response.data;
+  },
+  getStudyGroups: async () => {
+    const response = await axios.get(`${API_URL}/study-groups`);
+    return response.data;
+  },
+  createStudyGroup: async (name, courseId, userId) => {
+    const response = await axios.post(`${API_URL}/study-groups`, {
+      name, courseId, userId
+    });
+    return response.data;
+  },
+  joinStudyGroup: async (groupId, userId) => {
+    const response = await axios.post(`${API_URL}/study-groups/${groupId}/join`, { userId });
+    return response.data;
+  },
+  leaveStudyGroup: async (groupId, userId) => {
+    const response = await axios.post(`${API_URL}/study-groups/${groupId}/leave`, { userId });
+    return response.data;
+  },
+  getTasks: async (userId) => {
+    const response = await axios.get(`${API_URL}/tasks`, {
+      params: { userId }
+    });
+    return response.data;
+  },
+  createTask: async (userId, title, dueDate, priority) => {
+    const response = await axios.post(`${API_URL}/tasks`, {
+      userId, title, dueDate, priority
+    });
+    return response.data;
+  },
+  updateTaskCompletion: async (taskId, userId, completed) => {
+    const response = await axios.put(`${API_URL}/tasks/${taskId}/complete`, {
+      userId, completed
+    });
+    return response.data;
+  }
+};
 
-const mockStudyGroups = [
-  { id: 1, name: "Calculus Study Group", members: 8, course: "Mathematics" },
-  { id: 2, name: "Algorithm Design Team", members: 5, course: "Computer Science" },
-  { id: 3, name: "Physics Lab Partners", members: 4, course: "Physics" },
-];
-
-const mockTasks = [
-  { id: 1, title: "Complete calculus homework", due: "2025-05-05", priority: "High", completed: false },
-  { id: 2, title: "Review algorithm notes", due: "2025-05-06", priority: "Medium", completed: false },
-  { id: 3, title: "Submit physics lab report", due: "2025-05-04", priority: "High", completed: true },
-];
+// Add this helper function near the top of your file, before the StudySyncApp component
+const formatTime = (seconds) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
 
 export default function StudySyncApp() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [registerForm, setRegisterForm] = useState({ username: '', email: '', password: '', confirmPassword: '' });
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
   const [pomodoroActive, setPomodoroActive] = useState(false);
-  const [pomodoroMode, setPomodoroMode] = useState('focus'); // focus or break
+  const [pomodoroMode, setPomodoroMode] = useState('focus');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredResources, setFilteredResources] = useState(mockResources);
-  const [tasks, setTasks] = useState(mockTasks);
+  const [resources, setResources] = useState([]);
+  const [studyGroups, setStudyGroups] = useState([]);
+  const [joinedGroups, setJoinedGroups] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [newTask, setNewTask] = useState({ title: '', due: '', priority: 'Medium' });
   const [showDropdown, setShowDropdown] = useState(false);
-  
-  // Filter resources based on search query
-  useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setFilteredResources(mockResources);
-    } else {
-      const filtered = mockResources.filter(resource => 
-        resource.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        mockCourses.find(c => c.id === resource.courseId)?.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredResources(filtered);
-    }
-  }, [searchQuery]);
+  const [showNotification, setShowNotification] = useState(false);
+  const [notification, setNotification] = useState({ message: '', type: 'success' });
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadForm, setUploadForm] = useState({ title: '', courseId: 1, description: '', file: null });
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [ratingResource, setRatingResource] = useState(null);
+  const [ratingForm, setRatingForm] = useState({ rating: 5, comment: '' });
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Pomodoro timer effect
+  // Load data when the app starts or user logs in
   useEffect(() => {
-    let interval;
-    if (pomodoroActive && pomodoroTime > 0) {
-      interval = setInterval(() => {
-        setPomodoroTime(prevTime => prevTime - 1);
-      }, 1000);
-    } else if (pomodoroTime === 0) {
-      // Switch between focus and break
-      if (pomodoroMode === 'focus') {
-        setPomodoroMode('break');
-        setPomodoroTime(5 * 60); // 5 minute break
-      } else {
-        setPomodoroMode('focus');
-        setPomodoroTime(25 * 60); // 25 minute focus
+    const loadInitialData = async () => {
+      try {
+        // Always load resources, they're public
+        const resourcesData = await api.getResources(searchQuery);
+        setResources(resourcesData);
+        
+        // Load study groups
+        const groupsData = await api.getStudyGroups();
+        setStudyGroups(groupsData);
+        
+        // Load user-specific data if logged in
+        if (isLoggedIn && user) {
+          const tasksData = await api.getTasks(user.id);
+          setTasks(tasksData);
+          
+          // Get joined groups from the group members data
+          const joinedGroupIds = groupsData
+            .filter(group => group.members?.some(member => member.userId === user.id))
+            .map(group => group.id);
+            
+          setJoinedGroups(joinedGroupIds);
+        }
+      } catch (error) {
+        console.error("Error loading initial data:", error);
+        showToast('Failed to load data. Please try again later.', 'error');
       }
+    };
+    
+    loadInitialData();
+  }, [isLoggedIn, user, searchQuery]);
+
+  // Handle login
+  const handleLogin = async () => {
+    try {
+      setIsLoading(true);
+      const { email, password } = loginForm;
+      
+      if (!email || !password) {
+        showToast('Please enter both email and password', 'error');
+        return;
+      }
+      
+      const result = await api.login(email, password);
+      setUser(result.user);
+      setIsLoggedIn(true);
+      setShowLoginModal(false);
+      showToast(`Welcome back, ${result.user.username}!`, 'success');
+    } catch (error) {
+      console.error("Login error:", error);
+      showToast('Login failed: ' + (error.response?.data?.error || 'Unknown error'), 'error');
+    } finally {
+      setIsLoading(false);
     }
-    return () => clearInterval(interval);
-  }, [pomodoroActive, pomodoroTime, pomodoroMode]);
-
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleLogin = () => {
-    setIsLoggedIn(true);
-    setShowLoginModal(false);
+  // Handle registration
+  const handleRegister = async () => {
+    try {
+      setIsLoading(true);
+      const { username, email, password, confirmPassword } = registerForm;
+      
+      if (!username || !email || !password) {
+        showToast('Please fill in all required fields', 'error');
+        return;
+      }
+      
+      if (password !== confirmPassword) {
+        showToast('Passwords do not match', 'error');
+        return;
+      }
+      
+      const user = await api.register(username, email, password);
+      setUser(user);
+      setIsLoggedIn(true);
+      setShowRegisterModal(false);
+      showToast('Registration successful!', 'success');
+    } catch (error) {
+      console.error("Registration error:", error);
+      showToast('Registration failed: ' + (error.response?.data?.error || 'Unknown error'), 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
+  // Handle logout
   const handleLogout = () => {
+    setUser(null);
     setIsLoggedIn(false);
     setActiveTab('dashboard');
+    setJoinedGroups([]);
+    setTasks([]);
+    showToast('You have been logged out successfully', 'success');
   };
 
-  const addTask = () => {
-    if (newTask.title.trim() !== '') {
-      setTasks([
-        ...tasks,
-        {
-          id: tasks.length + 1,
-          title: newTask.title,
-          due: newTask.due || '2025-05-10',
-          priority: newTask.priority,
-          completed: false
-        }
-      ]);
-      setNewTask({ title: '', due: '', priority: 'Medium' });
+  // Handle joining a study group
+  const joinGroup = async (groupId) => {
+    if (!isLoggedIn) {
+      showToast('Please log in to join study groups', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      // Check if already joined
+      if (joinedGroups.includes(groupId)) {
+        // Leave the group
+        await api.leaveStudyGroup(groupId, user.id);
+        setJoinedGroups(joinedGroups.filter(id => id !== groupId));
+        showToast('You have left the study group', 'success');
+      } else {
+        // Join the group
+        await api.joinStudyGroup(groupId, user.id);
+        setJoinedGroups([...joinedGroups, groupId]);
+        showToast('You have joined the study group!', 'success');
+      }
+      
+      // Refresh study groups
+      const groupsData = await api.getStudyGroups();
+      setStudyGroups(groupsData);
+    } catch (error) {
+      console.error("Error joining/leaving group:", error);
+      showToast('Failed to update group membership', 'error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const toggleTaskCompletion = (id) => {
-    setTasks(tasks.map(task => 
-      task.id === id ? { ...task, completed: !task.completed } : task
-    ));
+  // Handle adding a task
+  const addTask = async () => {
+    if (!isLoggedIn) {
+      showToast('Please log in to manage tasks', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    if (newTask.title.trim() === '') {
+      showToast('Please enter a task title', 'error');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      await api.createTask(
+        user.id, 
+        newTask.title, 
+        newTask.due || new Date().toISOString().split('T')[0], 
+        newTask.priority
+      );
+      
+      // Refresh tasks
+      const tasksData = await api.getTasks(user.id);
+      setTasks(tasksData);
+      
+      setNewTask({ title: '', due: '', priority: 'Medium' });
+      showToast('Task added successfully!', 'success');
+    } catch (error) {
+      console.error("Error adding task:", error);
+      showToast('Failed to add task', 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // Components
+  // Handle task completion toggle
+  const toggleTaskCompletion = async (taskId) => {
+    if (!isLoggedIn) {
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      const taskToUpdate = tasks.find(task => task.id === taskId);
+      const newCompletionStatus = !taskToUpdate.completed;
+      
+      await api.updateTaskCompletion(taskId, user.id, newCompletionStatus);
+      
+      // Refresh tasks
+      const tasksData = await api.getTasks(user.id);
+      setTasks(tasksData);
+      
+      if (newCompletionStatus) {
+        showToast(`Task "${taskToUpdate.title}" completed!`, 'success');
+      }
+    } catch (error) {
+      console.error("Error updating task:", error);
+      showToast('Failed to update task', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle resource upload
+  const handleUploadResource = async () => {
+    if (!isLoggedIn) {
+      showToast('Please log in to upload resources', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    if (!uploadForm.title || !uploadForm.file) {
+      showToast('Please provide a title and file', 'error');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      const formData = new FormData();
+      formData.append('title', uploadForm.title);
+      formData.append('courseId', uploadForm.courseId);
+      formData.append('description', uploadForm.description);
+      formData.append('userId', user.id);
+      formData.append('file', uploadForm.file);
+      
+      await api.uploadResource(formData);
+      
+      // Refresh resources
+      const resourcesData = await api.getResources(searchQuery);
+      setResources(resourcesData);
+      
+      setShowUploadModal(false);
+      setUploadForm({ title: '', courseId: 1, description: '', file: null });
+      showToast('Resource uploaded successfully!', 'success');
+    } catch (error) {
+      console.error("Error uploading resource:", error);
+      showToast('Failed to upload resource', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle resource rating
+  const submitRating = async () => {
+    if (!isLoggedIn) {
+      showToast('Please log in to rate resources', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      await api.rateResource(
+        ratingResource.id, 
+        user.id, 
+        ratingForm.rating, 
+        ratingForm.comment
+      );
+      
+      // Refresh resources
+      const resourcesData = await api.getResources(searchQuery);
+      setResources(resourcesData);
+      
+      setShowRatingModal(false);
+      setRatingForm({ rating: 5, comment: '' });
+      showToast(`Thank you for rating "${ratingResource.title}"!`, 'success');
+    } catch (error) {
+      console.error("Error submitting rating:", error);
+      showToast('Failed to submit rating', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle resource download
+  const downloadResource = async (resourceId) => {
+    if (!isLoggedIn) {
+      showToast('Please log in to download resources', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    try {
+      // Find resource to get the download URL
+      const resource = resources.find(r => r.id === resourceId);
+      if (!resource) {
+        showToast('Resource not found', 'error');
+        return;
+      }
+      
+      // In a real app, you would handle download logic here
+      // For now, just show a success message
+      showToast('Resource downloaded successfully!', 'success');
+    } catch (error) {
+      console.error("Error downloading resource:", error);
+      showToast('Failed to download resource', 'error');
+    }
+  };
+
+  // Update toast notification
+  const showToast = (message, type = 'success') => {
+    setNotification({ message, type });
+    setShowNotification(true);
+  };
+
+  // Open rating modal
+  const openRatingModal = (resource) => {
+    if (!isLoggedIn) {
+      showToast('Please log in to rate resources', 'error');
+      setShowLoginModal(true);
+      return;
+    }
+    
+    setRatingResource(resource);
+    setRatingForm({ rating: 5, comment: '' });
+    setShowRatingModal(true);
+  };
+
+  // Update LoginModal to use form state
   const LoginModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white p-6 rounded-lg shadow-lg w-96">
         <h2 className="text-2xl font-bold mb-4">Log In</h2>
         <div className="mb-4">
           <label className="block text-gray-700 mb-2">Email</label>
-          <input type="email" className="w-full p-2 border rounded" placeholder="your@email.com" />
+          <input 
+            type="email" 
+            className="w-full p-2 border rounded" 
+            placeholder="your@email.com"
+            value={loginForm.email}
+            onChange={(e) => setLoginForm({...loginForm, email: e.target.value})}
+          />
         </div>
         <div className="mb-6">
           <label className="block text-gray-700 mb-2">Password</label>
-          <input type="password" className="w-full p-2 border rounded" placeholder="********" />
+          <input 
+            type="password" 
+            className="w-full p-2 border rounded" 
+            placeholder="********"
+            value={loginForm.password}
+            onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
+          />
         </div>
         <div className="flex justify-between">
           <button 
             onClick={() => setShowLoginModal(false)} 
             className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+            disabled={isLoading}
           >
             Cancel
           </button>
           <button 
             onClick={handleLogin} 
             className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            disabled={isLoading}
           >
-            Log In
+            {isLoading ? 'Logging in...' : 'Log In'}
           </button>
         </div>
       </div>
     </div>
   );
 
+  // Update RegisterModal to use form state
   const RegisterModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white p-6 rounded-lg shadow-lg w-96">
         <h2 className="text-2xl font-bold mb-4">Register</h2>
         <div className="mb-4">
           <label className="block text-gray-700 mb-2">Username</label>
-          <input type="text" className="w-full p-2 border rounded" placeholder="username" />
+          <input 
+            type="text" 
+            className="w-full p-2 border rounded" 
+            placeholder="username"
+            value={registerForm.username}
+            onChange={(e) => setRegisterForm({...registerForm, username: e.target.value})}
+          />
         </div>
         <div className="mb-4">
           <label className="block text-gray-700 mb-2">Email</label>
-          <input type="email" className="w-full p-2 border rounded" placeholder="your@email.com" />
+          <input 
+            type="email" 
+            className="w-full p-2 border rounded" 
+            placeholder="your@email.com"
+            value={registerForm.email}
+            onChange={(e) => setRegisterForm({...registerForm, email: e.target.value})}
+          />
         </div>
         <div className="mb-4">
           <label className="block text-gray-700 mb-2">Password</label>
-          <input type="password" className="w-full p-2 border rounded" placeholder="********" />
+          <input 
+            type="password" 
+            className="w-full p-2 border rounded" 
+            placeholder="********"
+            value={registerForm.password}
+            onChange={(e) => setRegisterForm({...registerForm, password: e.target.value})}
+          />
         </div>
         <div className="mb-6">
           <label className="block text-gray-700 mb-2">Confirm Password</label>
-          <input type="password" className="w-full p-2 border rounded" placeholder="********" />
+          <input 
+            type="password" 
+            className="w-full p-2 border rounded" 
+            placeholder="********"
+            value={registerForm.confirmPassword}
+            onChange={(e) => setRegisterForm({...registerForm, confirmPassword: e.target.value})}
+          />
         </div>
         <div className="flex justify-between">
           <button 
             onClick={() => setShowRegisterModal(false)} 
             className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+            disabled={isLoading}
           >
             Cancel
           </button>
           <button 
-            onClick={() => {
-              setIsLoggedIn(true);
-              setShowRegisterModal(false);
-            }} 
+            onClick={handleRegister} 
             className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            disabled={isLoading}
           >
-            Register
+            {isLoading ? 'Registering...' : 'Register'}
           </button>
         </div>
       </div>
     </div>
   );
 
-  const Header = () => (
-    <header className="bg-blue-600 text-white p-4">
-      <div className="container mx-auto flex justify-between items-center">
-        <div className="flex items-center space-x-2">
-          <Book size={24} />
-          <h1 className="text-2xl font-bold">Study Sync</h1>
+  // Update UploadModal to use form state
+  const UploadModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-lg w-96">
+        <h2 className="text-2xl font-bold mb-4">Upload Resource</h2>
+        <div className="mb-4">
+          <label className="block text-gray-700 mb-2">Title</label>
+          <input 
+            type="text" 
+            className="w-full p-2 border rounded" 
+            placeholder="Resource title"
+            value={uploadForm.title}
+            onChange={(e) => setUploadForm({...uploadForm, title: e.target.value})}
+          />
         </div>
-        <div className="flex space-x-4 items-center">
-          {isLoggedIn ? (
-            <div className="relative">
-              <button 
-                onClick={() => setShowDropdown(!showDropdown)}
-                className="flex items-center space-x-2 bg-blue-700 p-2 rounded-md hover:bg-blue-800"
-              >
-                <User size={18} />
-                <span>John Doe</span>
-                <ChevronDown size={18} />
-              </button>
-              {showDropdown && (
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 text-gray-800 z-10">
-                  <a href="#" className="block px-4 py-2 hover:bg-gray-100">Profile</a>
-                  <a href="#" className="block px-4 py-2 hover:bg-gray-100">Settings</a>
-                  <a href="#" onClick={handleLogout} className="block px-4 py-2 hover:bg-gray-100">Logout</a>
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <button 
-                onClick={() => setShowLoginModal(true)} 
-                className="flex items-center space-x-1 hover:underline"
-              >
-                <LogIn size={18} />
-                <span>Login</span>
-              </button>
-              <button 
-                onClick={() => setShowRegisterModal(true)} 
-                className="flex items-center space-x-1 hover:underline"
-              >
-                <UserPlus size={18} />
-                <span>Register</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </header>
-  );
-
-  const Navbar = () => (
-    <nav className="bg-gray-100 border-b">
-      <div className="container mx-auto">
-        <ul className="flex">
-          <li>
-            <button 
-              onClick={() => setActiveTab('dashboard')} 
-              className={`px-4 py-3 ${activeTab === 'dashboard' ? 'bg-white border-b-2 border-blue-500' : 'hover:bg-gray-200'}`}
-            >
-              Dashboard
-            </button>
-          </li>
-          <li>
-            <button 
-              onClick={() => setActiveTab('resources')} 
-              className={`px-4 py-3 ${activeTab === 'resources' ? 'bg-white border-b-2 border-blue-500' : 'hover:bg-gray-200'}`}
-            >
-              Resources
-            </button>
-          </li>
-          <li>
-            <button 
-              onClick={() => setActiveTab('studygroups')} 
-              className={`px-4 py-3 ${activeTab === 'studygroups' ? 'bg-white border-b-2 border-blue-500' : 'hover:bg-gray-200'}`}
-            >
-              Study Groups
-            </button>
-          </li>
-          <li>
-            <button 
-              onClick={() => setActiveTab('pomodoro')} 
-              className={`px-4 py-3 ${activeTab === 'pomodoro' ? 'bg-white border-b-2 border-blue-500' : 'hover:bg-gray-200'}`}
-            >
-              Pomodoro
-            </button>
-          </li>
-          <li>
-            <button 
-              onClick={() => setActiveTab('todos')} 
-              className={`px-4 py-3 ${activeTab === 'todos' ? 'bg-white border-b-2 border-blue-500' : 'hover:bg-gray-200'}`}
-            >
-              To-Dos
-            </button>
-          </li>
-        </ul>
-      </div>
-    </nav>
-  );
-
-  const Dashboard = () => (
-    <div className="container mx-auto p-6">
-      <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {/* Recent Activity */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
-          <ul className="space-y-3">
-            <li className="flex items-start space-x-2">
-              <div className="bg-blue-100 p-1 rounded">
-                <Upload size={16} className="text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm">You uploaded <span className="font-medium">Physics Notes</span></p>
-                <p className="text-xs text-gray-500">2 hours ago</p>
-              </div>
-            </li>
-            <li className="flex items-start space-x-2">
-              <div className="bg-green-100 p-1 rounded">
-                <Users size={16} className="text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm">You joined <span className="font-medium">Algorithm Design Team</span></p>
-                <p className="text-xs text-gray-500">Yesterday</p>
-              </div>
-            </li>
-            <li className="flex items-start space-x-2">
-              <div className="bg-purple-100 p-1 rounded">
-                <CheckSquare size={16} className="text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm">You completed <span className="font-medium">Physics Lab Report</span></p>
-                <p className="text-xs text-gray-500">2 days ago</p>
-              </div>
-            </li>
-          </ul>
-        </div>
-        
-        {/* Upcoming Tasks */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4">Upcoming Tasks</h3>
-          <ul className="space-y-3">
-            {tasks.filter(task => !task.completed).slice(0, 3).map(task => (
-              <li key={task.id} className="flex items-center space-x-2">
-                <input 
-                  type="checkbox" 
-                  checked={task.completed}
-                  onChange={() => toggleTaskCompletion(task.id)}
-                  className="h-4 w-4 text-blue-600 rounded" 
-                />
-                <div>
-                  <p className="text-sm font-medium">{task.title}</p>
-                  <p className="text-xs text-gray-500">Due: {task.due} • {task.priority}</p>
-                </div>
-              </li>
+        <div className="mb-4">
+          <label className="block text-gray-700 mb-2">Course</label>
+          <select 
+            className="w-full p-2 border rounded"
+            value={uploadForm.courseId}
+            onChange={(e) => setUploadForm({...uploadForm, courseId: e.target.value})}
+          >
+            {studyGroups.map(course => (
+              <option key={course.id} value={course.id}>{course.name}</option>
             ))}
-            {tasks.filter(task => !task.completed).length === 0 && (
-              <p className="text-sm text-gray-500">No upcoming tasks</p>
-            )}
-          </ul>
+          </select>
         </div>
-        
-        {/* Pomodoro Status */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-semibold mb-4">Pomodoro Status</h3>
-          <div className="flex flex-col items-center">
-            <div className="w-32 h-32 rounded-full border-4 border-blue-500 flex items-center justify-center mb-4">
-              <span className="text-2xl font-bold">{formatTime(pomodoroTime)}</span>
-            </div>
-            <p className="mb-2 text-center">
-              {pomodoroActive ? 
-                `${pomodoroMode === 'focus' ? 'Focus' : 'Break'} time remaining` : 
-                'Start a Pomodoro session'
-              }
+        <div className="mb-4">
+          <label className="block text-gray-700 mb-2">File</label>
+          <div 
+            className="border-2 border-dashed border-gray-300 rounded p-4 text-center cursor-pointer hover:bg-gray-50"
+            onClick={() => document.getElementById('file-upload').click()}
+          >
+            <Upload size={24} className="mx-auto text-gray-400 mb-2" />
+            <p className="text-sm text-gray-500">
+              {uploadForm.file ? uploadForm.file.name : 'Click to browse or drag and drop'}
             </p>
-            {!pomodoroActive && (
-              <button 
-                onClick={() => {
-                  setPomodoroActive(true);
-                  setActiveTab('pomodoro');
-                }} 
-                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-              >
-                Start Session
-              </button>
-            )}
+            <p className="text-xs text-gray-400 mt-1">PDF, DOCX, PPTX (max 10MB)</p>
+            <input 
+              id="file-upload" 
+              type="file" 
+              className="hidden"
+              onChange={(e) => setUploadForm({...uploadForm, file: e.target.files[0]})}
+            />
           </div>
         </div>
-      </div>
-    </div>
-  );
-
-  const Resources = () => (
-    <div className="container mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Resources</h2>
-        <div className="flex space-x-4">
-          <div className="relative">
-            <input 
-              type="text" 
-              placeholder="Search resources..." 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 py-2 border rounded-md w-64" 
-            />
-            <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
-          </div>
-          <button className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 flex items-center">
-            <Upload size={18} className="mr-1" />
-            Upload Resource
+        <div className="mb-6">
+          <label className="block text-gray-700 mb-2">Description (optional)</label>
+          <textarea 
+            className="w-full p-2 border rounded" 
+            rows="3" 
+            placeholder="Brief description of the resource"
+            value={uploadForm.description}
+            onChange={(e) => setUploadForm({...uploadForm, description: e.target.value})}
+          ></textarea>
+        </div>
+        <div className="flex justify-between">
+          <button 
+            onClick={() => setShowUploadModal(false)} 
+            className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+            disabled={isLoading}
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={handleUploadResource} 
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            disabled={isLoading}
+          >
+            {isLoading ? 'Uploading...' : 'Upload'}
           </button>
         </div>
       </div>
-      
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Course</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Uploaded By</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rating</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredResources.map(resource => (
-                <tr key={resource.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <FileText size={18} className="text-gray-500 mr-2" />
-                      <div className="text-sm font-medium text-gray-900">{resource.title}</div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">
-                      {mockCourses.find(c => c.id === resource.courseId)?.name}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{resource.user}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{resource.date}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                      {resource.type}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <Star size={16} className="text-yellow-500 mr-1" />
-                      <span className="text-sm text-gray-900">{resource.rating}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <a href="#" className="text-blue-600 hover:text-blue-900 mr-3">Download</a>
-                    <a href="#" className="text-green-600 hover:text-green-900">Rate</a>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 
+  // Update StudyGroups to use database data
   const StudyGroups = () => (
     <div className="container mx-auto p-6">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Study Groups</h2>
-        <button className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 flex items-center">
+        <button 
+          onClick={() => {
+            if (!isLoggedIn) {
+              showToast('Please log in to create study groups', 'error');
+              setShowLoginModal(true);
+              return;
+            }
+            showToast('Study group creation feature coming soon!', 'info');
+          }}
+          className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 flex items-center"
+          disabled={isLoading}
+        >
           <Plus size={18} className="mr-1" />
           Create Group
         </button>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {mockStudyGroups.map(group => (
-          <div key={group.id} className="bg-white p-4 rounded-lg shadow">
-            <div className="flex justify-between items-start mb-4">
-              <h3 className="text-lg font-semibold">{group.name}</h3>
-              <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
-                {group.course}
-              </span>
+      {isLoading ? (
+        <div className="text-center py-10">Loading study groups...</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {studyGroups.map(group => {
+            const isJoined = joinedGroups.includes(group.id);
+            return (
+              <div key={group.id} className="bg-white p-4 rounded-lg shadow">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="text-lg font-semibold">{group.name}</h3>
+                  <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                    {group.course_name}
+                  </span>
+                </div>
+                <div className="flex items-center text-sm text-gray-600 mb-4">
+                  <Users size={16} className="mr-1" />
+                  <span>{group.member_count} members</span>
+                  {isJoined && (
+                    <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                      Joined
+                    </span>
+                  )}
+                </div>
+                
+                <div className="border-t pt-4 mt-2">
+                  <h4 className="text-sm font-medium mb-2">Recent Activity</h4>
+                  <ul className="space-y-2 text-sm">
+                    <li className="flex items-start space-x-2">
+                      <div className="bg-green-100 p-1 rounded mt-0.5">
+                        <Upload size={12} className="text-green-600" />
+                      </div>
+                      <div>
+                        <p className="text-xs">Created by {group.created_by_user}</p>
+                        <p className="text-xs text-gray-500">
+                          {new Date(group.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+                
+                <div className="flex justify-between mt-4 pt-4 border-t">
+                  <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">View Details</button>
+                  <button 
+                    onClick={() => joinGroup(group.id)} 
+                    className={`${
+                      isJoined ? 'bg-gray-500 hover:bg-gray-600' : 'bg-blue-500 hover:bg-blue-600'
+                    } text-white px-3 py-1 rounded text-sm`}
+                    disabled={isLoading}
+                  >
+                    {isJoined ? 'Leave Group' : 'Join Group'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          
+          {studyGroups.length === 0 && (
+            <div className="col-span-3 text-center py-10 text-gray-500">
+              No study groups available
             </div>
-            <div className="flex items-center text-sm text-gray-600 mb-4">
-              <Users size={16} className="mr-1" />
-              <span>{group.members} members</span>
-            </div>
-            
-            <div className="border-t pt-4 mt-2">
-              <h4 className="text-sm font-medium mb-2">Recent Activity</h4>
-              <ul className="space-y-2 text-sm">
-                <li className="flex items-start space-x-2">
-                  <div className="bg-green-100 p-1 rounded mt-0.5">
-                    <Upload size={12} className="text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs">Jane shared <span className="font-medium">Midterm Notes</span></p>
-                    <p className="text-xs text-gray-500">2 hours ago</p>
-                  </div>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <div className="bg-purple-100 p-1 rounded mt-0.5">
-                    <Calendar size={12} className="text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs">Study session scheduled for <span className="font-medium">May 5th</span></p>
-                    <p className="text-xs text-gray-500">Yesterday</p>
-                  </div>
-                </li>
-              </ul>
-            </div>
-            
-            <div className="flex justify-between mt-4 pt-4 border-t">
-              <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">View Details</button>
-              <button className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">Join Group</button>
-            </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -724,6 +908,432 @@ export default function StudySyncApp() {
     </div>
   );
 
+  // Header component
+  const Header = () => (
+    <header className="bg-white shadow">
+      <div className="container mx-auto px-4 py-6 flex justify-between items-center">
+        <div className="flex items-center">
+          <Book size={24} className="text-blue-600 mr-2" />
+          <h1 className="text-xl font-bold text-gray-800">StudySync</h1>
+        </div>
+        
+        <div className="relative">
+          <div className="flex items-center space-x-2 relative">
+            <div className="relative">
+              <button 
+                onClick={() => setShowNotification(!showNotification)} 
+                className="p-2 rounded-full hover:bg-gray-100"
+              >
+                <Bell size={20} className="text-gray-600" />
+                <span className="absolute top-0 right-0 h-2 w-2 bg-red-500 rounded-full"></span>
+              </button>
+            </div>
+            
+            {isLoggedIn ? (
+              <div className="relative">
+                <button 
+                  onClick={() => setShowDropdown(!showDropdown)} 
+                  className="flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-100"
+                >
+                  <div className="h-8 w-8 rounded-full bg-blue-500 text-white flex items-center justify-center">
+                    <User size={16} />
+                  </div>
+                  <span className="text-sm font-medium hidden sm:block">{user.username}</span>
+                  <ChevronDown size={16} className="text-gray-600" />
+                </button>
+                
+                {showDropdown && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10">
+                    <div className="py-1">
+                      <a href="#profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Profile</a>
+                      <a href="#settings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</a>
+                      <button 
+                        onClick={handleLogout}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex space-x-2">
+                <button 
+                  onClick={() => setShowLoginModal(true)} 
+                  className="flex items-center px-3 py-2 rounded text-sm font-medium text-blue-600 hover:bg-blue-50"
+                >
+                  <LogIn size={16} className="mr-1" />
+                  Log In
+                </button>
+                
+                <button 
+                  onClick={() => setShowRegisterModal(true)} 
+                  className="flex items-center px-3 py-2 bg-blue-600 rounded text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  <UserPlus size={16} className="mr-1" />
+                  Register
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+
+  // Navbar component
+  const Navbar = () => (
+    <nav className="bg-white border-b border-gray-200">
+      <div className="container mx-auto px-4">
+        <div className="flex space-x-8">
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+              activeTab === 'dashboard' 
+                ? 'border-blue-500 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Book size={18} className="mr-2" />
+            Dashboard
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('resources')} 
+            className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+              activeTab === 'resources' 
+                ? 'border-blue-500 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <FileText size={18} className="mr-2" />
+            Resources
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('studygroups')} 
+            className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+              activeTab === 'studygroups' 
+                ? 'border-blue-500 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Users size={18} className="mr-2" />
+            Study Groups
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('pomodoro')} 
+            className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+              activeTab === 'pomodoro' 
+                ? 'border-blue-500 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Clock size={18} className="mr-2" />
+            Pomodoro
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('todos')} 
+            className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+              activeTab === 'todos' 
+                ? 'border-blue-500 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <CheckSquare size={18} className="mr-2" />
+            To-Dos
+          </button>
+        </div>
+      </div>
+    </nav>
+  );
+
+  // Dashboard component
+  const Dashboard = () => (
+    <div className="container mx-auto p-6">
+      <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white p-5 rounded-lg shadow">
+          <div className="flex items-center mb-4">
+            <div className="bg-blue-100 p-2 rounded">
+              <FileText size={20} className="text-blue-600" />
+            </div>
+            <h3 className="text-lg font-semibold ml-3">Resources</h3>
+          </div>
+          <p className="text-3xl font-bold">{resources.length}</p>
+          <p className="text-sm text-gray-600 mt-1">Available study materials</p>
+        </div>
+        
+        <div className="bg-white p-5 rounded-lg shadow">
+          <div className="flex items-center mb-4">
+            <div className="bg-green-100 p-2 rounded">
+              <Users size={20} className="text-green-600" />
+            </div>
+            <h3 className="text-lg font-semibold ml-3">Study Groups</h3>
+          </div>
+          <p className="text-3xl font-bold">{studyGroups.length}</p>
+          <p className="text-sm text-gray-600 mt-1">Active study groups</p>
+        </div>
+        
+        <div className="bg-white p-5 rounded-lg shadow">
+          <div className="flex items-center mb-4">
+            <div className="bg-purple-100 p-2 rounded">
+              <CheckSquare size={20} className="text-purple-600" />
+            </div>
+            <h3 className="text-lg font-semibold ml-3">Tasks</h3>
+          </div>
+          <p className="text-3xl font-bold">{tasks.filter(t => !t.completed).length}</p>
+          <p className="text-sm text-gray-600 mt-1">Tasks remaining</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white p-5 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-4">Recent Resources</h3>
+          <div className="overflow-hidden">
+            <table className="min-w-full">
+              <thead className="border-b">
+                <tr>
+                  <th className="text-left text-sm font-medium text-gray-500 px-2 py-3">Title</th>
+                  <th className="text-left text-sm font-medium text-gray-500 px-2 py-3">Course</th>
+                  <th className="text-left text-sm font-medium text-gray-500 px-2 py-3">Rating</th>
+                  <th className="text-left text-sm font-medium text-gray-500 px-2 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resources.slice(0, 5).map((resource, index) => (
+                  <tr key={index} className="border-b hover:bg-gray-50">
+                    <td className="px-2 py-3 text-sm">{resource.title}</td>
+                    <td className="px-2 py-3 text-sm">{resource.course}</td>
+                    <td className="px-2 py-3">
+                      <div className="flex items-center">
+                        <Star size={16} className="text-yellow-400 fill-current" />
+                        <span className="text-sm ml-1">{resource.rating}</span>
+                      </div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <button 
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                        onClick={() => downloadResource(resource.id)}
+                      >
+                        Download
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4">
+            <button 
+              onClick={() => setActiveTab('resources')}
+              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+            >
+              View all resources
+            </button>
+          </div>
+        </div>
+        
+        <div className="bg-white p-5 rounded-lg shadow">
+          <h3 className="text-lg font-semibold mb-4">Upcoming Tasks</h3>
+          <ul className="divide-y">
+            {tasks.filter(t => !t.completed).slice(0, 5).map((task, index) => (
+              <li key={index} className="py-3 flex items-center">
+                <input 
+                  type="checkbox" 
+                  className="h-4 w-4 text-blue-600 rounded mr-3" 
+                  checked={false}
+                  onChange={() => toggleTaskCompletion(task.id)}
+                />
+                <div className="flex-1">
+                  <p className="font-medium">{task.title}</p>
+                  <p className="text-xs text-gray-500">Due: {task.due}</p>
+                </div>
+                <span className={`text-xs px-2 py-1 rounded-full ${
+                  task.priority === 'High' ? 'bg-red-100 text-red-800' :
+                  task.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-green-100 text-green-800'
+                }`}>
+                  {task.priority}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-4">
+            <button 
+              onClick={() => setActiveTab('todos')}
+              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+            >
+              View all tasks
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Resources component
+  const Resources = () => (
+    <div className="container mx-auto p-6">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Study Resources</h2>
+        <button 
+          onClick={() => {
+            if (!isLoggedIn) {
+              showToast('Please log in to upload resources', 'error');
+              setShowLoginModal(true);
+              return;
+            }
+            setShowUploadModal(true);
+          }} 
+          className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 flex items-center"
+        >
+          <Upload size={18} className="mr-1" />
+          Upload Resource
+        </button>
+      </div>
+      
+      <div className="mb-6">
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="Search resources..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full p-3 pl-10 border rounded-lg"
+          />
+          <Search size={18} className="absolute left-3 top-3.5 text-gray-400" />
+        </div>
+      </div>
+      
+      {isLoading ? (
+        <div className="text-center py-10">Loading resources...</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {resources.map((resource, index) => (
+            <div key={index} className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="p-5">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="text-lg font-semibold">{resource.title}</h3>
+                  <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                    {resource.course}
+                  </span>
+                </div>
+                
+                <div className="flex items-center mb-3">
+                  <div className="flex items-center mr-4">
+                    <Star size={16} className="text-yellow-400 fill-current" />
+                    <span className="text-sm ml-1">{resource.rating}</span>
+                  </div>
+                  <span className="text-sm text-gray-500">
+                    Uploaded by {resource.author}
+                  </span>
+                </div>
+                
+                <p className="text-sm text-gray-600 mb-4">
+                  {resource.description || "No description available for this resource."}
+                </p>
+                
+                <div className="flex justify-between">
+                  <button 
+                    onClick={() => openRatingModal(resource)}
+                    className="text-sm text-blue-600 hover:text-blue-800"
+                  >
+                    Rate Resource
+                  </button>
+                  <button 
+                    onClick={() => downloadResource(resource.id)}
+                    className="flex items-center text-sm bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+                  >
+                    <Download size={14} className="mr-1" />
+                    Download
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          
+          {resources.length === 0 && (
+            <div className="col-span-3 text-center py-10 text-gray-500">
+              No resources found. Try a different search or upload a new resource!
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // Notification component
+  const Notification = () => (
+    <div className={`fixed bottom-4 right-4 bg-${notification.type === 'success' ? 'green' : notification.type === 'error' ? 'red' : 'blue'}-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center z-50`}>
+      <span>{notification.message}</span>
+      <button 
+        onClick={() => setShowNotification(false)}
+        className="ml-3"
+      >
+        <X size={16} />
+      </button>
+    </div>
+  );
+
+  // RatingModal component
+  const RatingModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-lg w-96">
+        <h2 className="text-2xl font-bold mb-4">Rate Resource</h2>
+        <p className="mb-4">{ratingResource?.title}</p>
+        
+        <div className="mb-4">
+          <label className="block text-gray-700 mb-2">Rating</label>
+          <div className="flex space-x-2">
+            {[1, 2, 3, 4, 5].map(rating => (
+              <button 
+                key={rating} 
+                onClick={() => setRatingForm({...ratingForm, rating})}
+                className="text-2xl text-yellow-400 hover:text-yellow-500 focus:outline-none"
+              >
+                <Star 
+                  size={24} 
+                  fill={ratingForm.rating >= rating ? "#FBBF24" : "none"} 
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        <div className="mb-6">
+          <label className="block text-gray-700 mb-2">Comment (optional)</label>
+          <textarea 
+            value={ratingForm.comment}
+            onChange={(e) => setRatingForm({...ratingForm, comment: e.target.value})}
+            className="w-full p-2 border rounded" 
+            rows="3" 
+            placeholder="Share your thoughts about this resource"
+          ></textarea>
+        </div>
+        
+        <div className="flex justify-between">
+          <button 
+            onClick={() => setShowRatingModal(false)} 
+            className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={submitRating} 
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          >
+            Submit Rating
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <Header />
@@ -745,6 +1355,9 @@ export default function StudySyncApp() {
       
       {showLoginModal && <LoginModal />}
       {showRegisterModal && <RegisterModal />}
+      {showUploadModal && <UploadModal />}
+      {showRatingModal && <RatingModal />}
+      {showNotification && <Notification />}
     </div>
   );
 }
